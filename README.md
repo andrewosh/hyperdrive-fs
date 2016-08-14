@@ -28,7 +28,7 @@ require('copy-on-write')('/path/to/mountpoint', {
 ```
 #### createFilesystem (mnt, opts, function (err, fs))
 Creates a filesystem instance, mounted at `mnt`
-#### `opts`:
+##### `opts`:
   1. `createImageStream(entry, offset)` - 
   2. `createIndexStream`
   3. (optional) `dir` - directory to store indices/layers
