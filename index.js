@@ -4,34 +4,29 @@ var collect = require('stream-collector')
 var p = require('path')
 var pump = require('pump')
 var mkdirp = require('mkdirp')
-var lexint = require('lexicographic-integer')
-var stream = require('stream')
 var shasum = require('shasum')
 var mknod = require('mknod')
 var cuid = require('cuid')
+var level = require('level')
+var map = require('through2-map')
+
+var util = require('./lib/util')
+var toIndexKey = util.toIndexKey
 
 var ENOENT = -2
 var EPERM = -1
 // var EINVAL = -22
 var EEXIST = -17
 
-var toIndexKey = function (name) {
-  var depth = name.split('/').length - 1
-  return lexint.pack(depth, 'hex') + name
-}
-
-var empty = function () {
-  var p = new stream.PassThrough()
-  p.end()
-  return p
-}
-
-module.exports = function (mnt, opts, cb) {
+function createFilesystem (mnt, opts, cb) {
   if (typeof opts === 'function') return module.exports(mnt, null, opts)
   if (!opts) opts = {}
-  var store = opts.store || p.join('.', cuid())
-  var createImageStream = opts.createImageStream || empty
-  var createIndexStream = opts.createIndexStream || empty
+  var dir = opts.dir || p.join('.', 'data')
+  var id = opts.id || cuid()
+  var store = p.join(dir, 'layers', id)
+  var db = opts.db || level(p.join(dir, 'dbs', id + '.db'))
+  var createFileStream = opts.createFileStream || util.empty
+  var createIndexStream = opts.createIndexStream || util.empty
 
   var dmode = 0
   var fmode = 0
@@ -48,8 +43,8 @@ module.exports = function (mnt, opts, cb) {
 
   var handlers = {}
   var createReadStream = function (entry, offset) {
-    if (!entry.length) return empty()
-    return createImageStream(entry, offset)
+    if (!entry.length) return util.empty()
+    return createFileStream(entry, offset)
   }
 
   var ready = function () {
@@ -557,6 +552,18 @@ module.exports = function (mnt, opts, cb) {
       return cb(0)
     }
 
+    /*
+     Generate a stream of the changes in the writable layer of the filesystem
+    */
+    handlers.createChangesStream = function () {
+      var stream = map.obj(function (chunk, cb) {
+        this.push(Object.assign({}, chunk, { key: util.fromIndexKey(chunk.key) }))
+        cb()
+      })
+      db.createReadStream({ valueEncoding: 'object' }).pipe(stream)
+      return stream
+    }
+
     handlers.options = ['allow_other']
     fuse.mount(mnt, handlers, function (err) {
       if (err) return cb(err)
@@ -581,3 +588,5 @@ module.exports = function (mnt, opts, cb) {
     })
   })
 }
+
+module.exports = createFilesystem

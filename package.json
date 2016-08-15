@@ -1,0 +1,48 @@
+{
+  "name": "copy-on-write",
+  "version": "1.0.0",
+  "description": "A copy-on-write FUSE implementation",
+  "main": "index.js",
+  "scripts": {
+    "build:test": "sh scripts/build-libfuse.sh",
+    "test": "standard && dependency-check . && tape test/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrewosh/copy-on-write.git"
+  },
+  "keywords": [
+    "copy-on-write",
+    "cow",
+    "fuse",
+    "filesystem",
+    "fs"
+  ],
+  "author": "Andrew Osheroff <andrewosh@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/andrewosh/copy-on-write/issues"
+  },
+  "homepage": "https://github.com/andrewosh/copy-on-write#readme",
+  "devDependencies": {
+    "dependency-check": "^2.6.0",
+    "istanbul": "^0.4.4",
+    "memdb": "^1.3.1",
+    "standard": "^7.1.2",
+    "tape": "^4.6.0",
+    "through2": "^2.0.1",
+    "walk": "^2.3.9"
+  },
+  "dependencies": {
+    "cuid": "^1.3.8",
+    "fuse-bindings": "^2.9.0",
+    "level": "^1.4.0",
+    "lexicographic-integer": "^1.1.0",
+    "mkdirp": "^0.5.1",
+    "mknod": "^1.1.0",
+    "pump": "^1.0.1",
+    "shasum": "^1.0.2",
+    "stream-collector": "^1.0.1",
+    "through2-map": "^2.0.0"
+  }
+}
