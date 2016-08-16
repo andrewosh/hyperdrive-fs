@@ -578,7 +578,6 @@ function createFilesystem (mnt, opts, cb) {
           fuse.unmount(mnt, ready)
         })
         indexStream.on('data', function (entry) {
-          console.log('putting:', toIndexKey(p.resolve(entry.name)))
           db.put(toIndexKey(p.resolve(entry.name)), entry, { valueEncoding: 'json' }, function (err) {
             if (err) return cb(err)
           })
