@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build:test": "sh scripts/build-libfuse.sh",
-    "test": "standard && dependency-check . && tape test/*.js"
+    "test": "standard && dependency-check . && tape test/all.js"
   },
   "repository": {
     "type": "git",

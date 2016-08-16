@@ -23,7 +23,7 @@ function createFilesystem (mnt, opts, cb) {
   if (!opts) opts = {}
   var dir = opts.dir || p.join('.', 'data')
   var id = opts.id || cuid()
-  var store = p.join(dir, 'layers', id)
+  var layers = p.join(dir, 'layers', id)
   var db = opts.db || level(p.join(dir, 'dbs', id + '.db'))
   var createFileStream = opts.createFileStream || util.empty
   var createIndexStream = opts.createIndexStream || util.empty
@@ -68,7 +68,6 @@ function createFilesystem (mnt, opts, cb) {
 
       get(path, function (err, entry) {
         if (err) return cb(ENOENT)
-        console.log('getattr, entry:', JSON.stringify(entry))
 
         function sizeAndMode (stat, cb) {
           if (entry.type === 'file') {
@@ -157,7 +156,7 @@ function createFilesystem (mnt, opts, cb) {
     }
 
     var getTargetPath = function (path) {
-      return p.join(store, 'layer', shasum(path + '-' + Date.now()))
+      return p.join(layers, shasum(path + '-' + Date.now()))
     }
 
     var copyOnWrite = function (path, mode, upsert, cb) {
@@ -254,7 +253,6 @@ function createFilesystem (mnt, opts, cb) {
         fs.read(file.fd, buf, 0, len, offset, function (err, bytes) {
           if (err) {
             console.error('read, err:', err)
-            console.log('file.fd:', file.fd, 'file.entry:', file.entry)
             return cb(EPERM)
           }
           cb(bytes)
@@ -470,7 +468,6 @@ function createFilesystem (mnt, opts, cb) {
         if (err) return cb(ENOENT)
         entry.atim = actime.getTime()
         entry.mtim = modtime.getTime()
-        console.log('entry:', JSON.stringify(entry))
         db.put(toIndexKey(path), entry, { valueEncoding: 'json' }, function (err) {
           if (err) return cb(err)
           return cb(0)
@@ -534,10 +531,8 @@ function createFilesystem (mnt, opts, cb) {
           var srcTarget = (entry) ? entry.layer : list[3].entry.layer
           var destTarget = getTargetPath(dest)
           entry.layer = destTarget
-          console.log('linking', srcTarget, 'to', destTarget)
           fs.link(srcTarget, destTarget, function (err) {
             if (err) return cb(err)
-            console.log('IN LINK', toIndexKey(dest), '->', JSON.stringify(entry))
             db.put(toIndexKey(dest), entry, { valueEncoding: 'json' }, function (err) {
               if (err) return cb(err)
               return cb(0)
@@ -548,7 +543,6 @@ function createFilesystem (mnt, opts, cb) {
     }
 
     handlers.destroy = function (cb) {
-      console.log('DESTROY')
       return cb(0)
     }
 
@@ -571,20 +565,26 @@ function createFilesystem (mnt, opts, cb) {
     })
   }
 
-  fs.exists(p.join(store, 'db'), function (exists) {
-    if (exists) return fuse.unmount(mnt, ready)
+  mkdirp(mnt, function (err) {
+    if (err) return cb(err)
+    fs.exists(layers, function (exists) {
+      if (exists) {
+        return fuse.unmount(mnt, ready)
+      }
 
-    mkdirp(p.join(store, 'layer'), function () {
-      var indexStream = createIndexStream()
-      indexStream.on('end', function () {
-        fuse.unmount(mnt, ready)
-      })
-      indexStream.on('data', function (entry) {
-        db.put(toIndexKey(p.resolve(entry.name)), entry, { valueEncoding: 'json' }, function (err) {
-          if (err) return cb(err)
+      mkdirp(layers, function () {
+        var indexStream = createIndexStream()
+        indexStream.on('close', function () {
+          fuse.unmount(mnt, ready)
         })
+        indexStream.on('data', function (entry) {
+          console.log('putting:', toIndexKey(p.resolve(entry.name)))
+          db.put(toIndexKey(p.resolve(entry.name)), entry, { valueEncoding: 'json' }, function (err) {
+            if (err) return cb(err)
+          })
+        })
+        indexStream.resume()
       })
-      indexStream.resume()
     })
   })
 }
