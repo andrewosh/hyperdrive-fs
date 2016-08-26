@@ -18,13 +18,19 @@ var EPERM = -1
 // var EINVAL = -22
 var EEXIST = -17
 
-function createFilesystem (mnt, opts, cb) {
+function createFilesystem (opts, cb) {
   if (typeof opts === 'function') return module.exports(mnt, null, opts)
   if (!opts) opts = {}
-  var dir = opts.dir || p.join('.', 'data')
+  var dir = opts.dir || p.join('.', 'containers')
   var id = opts.id || cuid()
   var layers = p.join(dir, 'layers', id)
-  var db = opts.db || level(p.join(dir, 'dbs', id + '.db'))
+  var mnt = p.join(dir, 'mnt', id)
+  var db = null
+  if (opts.db) {
+    db = opts.db
+  } else {
+    var dbPath = p.join(dir, 'dbs', id + '.db')
+  }
   var createFileStream = opts.createFileStream || util.empty
   var createIndexStream = opts.createIndexStream || util.empty
 
@@ -549,7 +555,7 @@ function createFilesystem (mnt, opts, cb) {
     /*
      Generate a stream of the changes in the writable layer of the filesystem
     */
-    handlers.createChangesStream = function () {
+    function createChangesStream () {
       var stream = map.obj(function (chunk, cb) {
         this.push(Object.assign({}, chunk, { key: util.fromIndexKey(chunk.key) }))
         cb()
@@ -561,7 +567,13 @@ function createFilesystem (mnt, opts, cb) {
     handlers.options = ['allow_other']
     fuse.mount(mnt, handlers, function (err) {
       if (err) return cb(err)
-      cb(null, handlers)
+      cb(null, Object.assign({}, handlers, {
+        createChangesStream: createChangesStream,
+        mnt: mnt,
+        db: db,
+        layers: layers,
+        id: id
+      }))
     })
   }
 
@@ -573,16 +585,25 @@ function createFilesystem (mnt, opts, cb) {
       }
 
       mkdirp(layers, function () {
-        var indexStream = createIndexStream()
-        indexStream.on('close', function () {
-          fuse.unmount(mnt, ready)
-        })
-        indexStream.on('data', function (entry) {
-          db.put(toIndexKey(p.resolve(entry.name)), entry, { valueEncoding: 'json' }, function (err) {
-            if (err) return cb(err)
+        function begin () {
+          var indexStream = createIndexStream()
+          indexStream.on('end', function () {
+            fuse.unmount(mnt, ready)
           })
+          indexStream.on('data', function (entry) {
+            db.put(toIndexKey(p.resolve(entry.name)), entry, { valueEncoding: 'json' }, function (err) {
+              if (err) return cb(err)
+            })
+          })
+          indexStream.resume()
+        }
+        if (db) {
+          return begin()
+        }
+        mkdirp(dbPath, function () {
+          db = level(dbPath)
+          return begin()
         })
-        indexStream.resume()
       })
     })
   })
