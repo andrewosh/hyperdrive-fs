@@ -253,6 +253,8 @@ function createFilesystem (opts, cb) {
       var file = list[handle]
       if (!file) return cb(ENOENT)
 
+      if (file.entry.length === 0) return cb(0)
+
       if (len + offset > file.entry.length) len = file.entry.length - offset
 
       if (file.fd !== undefined) {
