@@ -1,146 +1,42 @@
-var fuse = require('fuse-bindings')
-var fs = require('fs')
 var collect = require('stream-collector')
-var p = require('path')
+var fuse = require('fuse-bindings')
 var pump = require('pump')
 var mkdirp = require('mkdirp')
-var shasum = require('shasum')
-var mknod = require('mknod')
-var cuid = require('cuid')
-var level = require('level')
-var map = require('through2-map')
+var debug = require('debug')
 
-var util = require('./lib/util')
-var toIndexKey = util.toIndexKey
-
-var ENOENT = -2
-var EPERM = -1
-// var EINVAL = -22
-var EEXIST = -17
-
-function createFilesystem (opts, cb) {
-  if (typeof opts === 'function') return module.exports(mnt, null, opts)
+function createFilesystem (drive, mnt, opts, cb) {
+  if (typeof opts === 'function') return module.exports(drive, mnt, null, opts)
   if (!opts) opts = {}
-  var dir = opts.dir || p.join('.', 'containers')
-  var id = opts.id || cuid()
-  var layers = p.join(dir, 'layers', id)
-  var mnt = p.join(dir, 'mnt', id)
-  var db = null
-  if (opts.db) {
-    db = opts.db
-  } else {
-    var dbPath = p.join(dir, 'dbs', id + '.db')
-  }
-  var createFileStream = opts.createFileStream || util.empty
-  var createIndexStream = opts.createIndexStream || util.empty
 
-  var dmode = 0
-  var fmode = 0
-  var log = opts.log || function () {}
-
-  if (opts.readable) {
-    dmode |= parseInt('0555', 8)
-    fmode |= parseInt('0444', 8)
-  }
-  if (opts.writable) {
-    dmode |= parseInt('0333', 8)
-    fmode |= parseInt('0222', 8)
-  }
-
+  var log = opts.log || debug('layerdrive-fs')
   var handlers = {}
-  var createReadStream = function (entry, offset) {
-    if (!entry.length) return util.empty()
-    return createFileStream(entry, offset)
-  }
 
   var ready = function () {
-    var get = function (path, cb) {
-      log('get', path)
-      if (path === '/') return cb(null, {name: '/', mode: parseInt('0755', 8), type: 'directory'})
-
-      db.get(toIndexKey(path), {valueEncoding: 'json'}, function (err, entry) {
-        if (err) return cb(err)
-        if (!entry.layer) return cb(null, entry)
-        fs.stat(entry.layer, function (err, stat) {
-          if (err) return cb(err)
-          entry.length = stat ? stat.size : 0
-          cb(null, entry)
-        })
-      })
+    function get (path, cb) {
+      console.log('getting')
+      return drive.stat(path, cb)
     }
 
     handlers.getattr = function (path, cb) {
       log('getattr', path)
 
       get(path, function (err, entry) {
-        if (err) return cb(ENOENT)
-
-        function sizeAndMode (stat, cb) {
-          if (entry.type === 'file') {
-            stat.size = entry.length
-            stat.mode = parseInt('0100000', 8) | entry.mode | fmode
-          }
-          if (entry.type === 'directory') {
-            stat.nlink = entry.nlink || 2
-            stat.size = 4096
-            stat.mode = parseInt('040000', 8) | entry.mode | dmode
-          }
-          if (entry.type === 'symlink') {
-            stat.mode = parseInt('120000', 8) | entry.mode
-          }
-          if (entry.type === 'device') {
-            stat.mode = entry.mode
-          }
-          return cb(0, stat)
-        }
-
-        var stat = {}
-        stat.nlink = 1
-        stat.size = 0
-        stat.atime = entry.atim
-        stat.mtime = entry.mtim
-        if (opts.uid !== undefined) stat.uid = opts.uid
-        if (opts.gid !== undefined) stat.gid = opts.gid
-
-        if (entry.layer) {
-          fs.stat(entry.layer, function (err, s) {
-            if (err) return cb(err)
-            stat.nlink = s.nlink
-            return sizeAndMode(stat, cb)
-          })
-        } else {
-          return sizeAndMode(stat, cb)
-        }
+        if (err) return cb(fuse.ENOENT)
+        return cb(0, entry)
       })
     }
 
     handlers.readdir = function (path, cb) {
       log('readdir', path)
-
-      var resolved = p.resolve(path)
-      if (!/\/$/.test(resolved)) resolved += '/'
-      var gte = toIndexKey(resolved)
-      var lt = toIndexKey(p.join(resolved, '\xff'))
-      var rs = db.createReadStream({
-        gte: gte,
-        lt: lt,
-        valueEncoding: 'json'
-      })
-
-      collect(rs, function (err, entries) {
-        if (err) return cb(ENOENT)
-
-        var files = entries.map(function (entry) {
-          return p.basename(entry.value.name)
-        })
-
-        cb(0, files)
+      return drive.readdir(path, function (err, files) {
+        if (err) return cb(fuse.ENOENT)
+        return cb(0, files)
       })
     }
 
     var files = []
-
     var open = function (path, flags, cb) {
+      console.log('open:', path)
       var push = function (data) {
         var list = files[path] = files[path] || [true, true, true] // fd > 3
         var fd = list.indexOf(null)
@@ -150,78 +46,15 @@ function createFilesystem (opts, cb) {
       }
 
       get(path, function (err, entry) {
-        if (err) return cb(ENOENT)
+        if (err) return cb(fuse.ENOENT)
         if (entry.type === 'symlink') return open(entry.linkname, flags, cb)
-        if (!entry.layer) return push({offset: 0, entry: entry})
-
-        fs.open(entry.layer, flags, function (err, fd) {
-          if (err) return cb(EPERM)
-          push({fd: fd, entry: entry})
-        })
-      })
-    }
-
-    var getTargetPath = function (path) {
-      return p.join(layers, shasum(path + '-' + Date.now()))
-    }
-
-    var copyOnWrite = function (path, mode, upsert, cb) {
-      log('copy-on-write', path)
-
-      var target = getTargetPath(path)
-
-      var done = function (entry) {
-        db.put(toIndexKey(entry.name), entry, {valueEncoding: 'json'}, function (err) {
-          if (err) {
-            console.error('copy-on-write:done, err:', err)
-            return cb(EPERM)
-          }
-          cb(0)
-        })
-      }
-
-      var create = function () {
-        var entry = {name: path, size: 0, type: 'file', mode: mode, layer: target}
-        fs.writeFile(target, '', function (err) {
-          if (err) {
-            console.error('copy-on-write:create, err:', err)
-            return cb(EPERM)
-          }
-          done(entry)
-        })
-      }
-
-      get(path, function (err, entry) {
-        if (err) {
-          if (err.notFound && upsert) return create()
-          if (err.notFound) return cb(ENOENT)
-          return cb(err)
-        }
-        if (entry && entry.layer) return cb(0)
-        if (!entry && upsert) return create()
-        if (!entry) return cb(ENOENT)
-
-        entry.layer = target
-        if (mode) entry.mode = mode
-
-        pump(createReadStream(entry, 0), fs.createWriteStream(target), function (err) {
-          if (err) {
-            console.error('copy-on-write:get, err:', err)
-            return cb(EPERM)
-          }
-          done(entry)
-        })
+        return push({offset: 0, entry: entry})
       })
     }
 
     handlers.open = function (path, flags, cb) {
       log('open', path, flags)
-
-      if ((flags & 3) === 0) return open(path, flags, cb)
-      copyOnWrite(path, 0, false, function (err) {
-        if (err) return cb(err)
-        open(path, flags, cb)
-      })
+      return open(path, flags, cb)
     }
 
     handlers.release = function (path, handle, cb) {
@@ -229,84 +62,68 @@ function createFilesystem (opts, cb) {
 
       var list = files[path] || []
       var file = list[handle]
-      if (!file) return cb(ENOENT)
-
-      if (file.stream) file.stream.destroy()
+      if (!file) return cb(fuse.ENOENT)
       list[handle] = null
       if (!list.length) delete files[path]
 
-      if (file.fd === undefined) return cb(0)
-
-      fs.close(file.fd, function (err) {
-        if (err) {
-          console.error('release, err:', err)
-          return cb(EPERM)
-        }
-        cb(0)
-      })
+      return cb(0)
     }
 
     handlers.read = function (path, handle, buf, len, offset, cb) {
       log('read', path, offset, len, handle, buf.length)
-
       var list = files[path] || []
       var file = list[handle]
-      if (!file) return cb(ENOENT)
+      if (!file) return cb(fuse.ENOENT)
 
       if (file.entry.length === 0) return cb(0)
 
       if (len + offset > file.entry.length) len = file.entry.length - offset
 
-      if (file.fd !== undefined) {
-        fs.read(file.fd, buf, 0, len, offset, function (err, bytes) {
-          if (err) {
-            console.error('read, err:', err)
-            return cb(EPERM)
-          }
-          cb(bytes)
+      if (file.fd === undefined) return
+
+      var stream = drive.createReadStream({ start: offset, length: len })
+      collect(stream, function (err, list) {
+        if (err) return cb(fuse.EPERM)
+        var offset = 0
+        list.forEach(function (data) {
+          data.copy(buf, offset)
+          offset += data.length
         })
-        return
-      }
-
-      if (file.stream && file.offset !== offset) {
-        file.stream.destroy()
-        file.stream = null
-      }
-
-      if (!file.stream) {
-        file.stream = createReadStream(file.entry, offset)
-        file.offset = offset
-      }
-
-      var loop = function () {
-        var result = file.stream.read(len)
-        if (!result) return file.stream.once('readable', loop)
-        file.offset += result.length
-        result.copy(buf)
-        cb(result.length)
-      }
-
-      loop()
+        return cb(offset)
+      })
     }
 
     handlers.truncate = function (path, size, cb) {
       log('truncate', path, size)
-
-      copyOnWrite(path, 0, false, function (err) {
-        if (err) return cb(err)
-        get(path, function (err, entry) {
-          if (err || !entry.layer) {
-            console.error('truncate:get, err:', err)
-            return cb(EPERM)
-          }
-          fs.truncate(entry.layer, size, function (err) {
-            if (err) {
-              console.error('truncate:fs, err:', err)
-              return cb(EPERM)
+      get(path, function (err, entry) {
+        if (err) return cb(fuse.EPERM)
+        var difference = size - entry.size
+        if (difference === 0) return cb(0)
+        if (difference < 0) return shorten(entry, Math.abs(difference))
+        function shorten (entry, amount) {
+          pump(drive.createReadStream(path, { end: entry.size - difference }),
+               drive.createWriteStream(path),
+            function (err) {
+              if (err) return cb(fuse.EPERM)
+              return cb(0)
             }
-            cb(0)
+          )
+        }
+        function extend (entry, amount) {
+          var stream = drive.createWriteStream(path, {
+            start: entry.size,
+            flags: 'r+',
+            defaultEncoding: 'binary'
           })
-        })
+          stream.on('finish', function () {
+            return cb(0)
+          })
+          stream.on('error', function () {
+            return cb(fuse.EPERM)
+          })
+          stream.write(Buffer.alloc(amount, '\0'))
+        }
+        return extend(entry, Math.abs(difference))
       })
     }
 
@@ -315,142 +132,95 @@ function createFilesystem (opts, cb) {
 
       var list = files[path] || []
       var file = list[handle]
-      if (!file) return cb(ENOENT)
+      if (!file) return cb(fuse.ENOENT)
       if (file.fd === undefined) {
         console.error('write:fd  error')
-        return cb(EPERM)
+        return cb(fuse.EPERM)
       }
-
-      fs.write(file.fd, buf, 0, len, offset, function (err, bytes) {
-        if (err) {
-          console.error('write:write, err:', err)
-          return cb(EPERM)
-        }
-        file.entry.length += bytes
-        db.put(toIndexKey(path), file.entry, { valueEncoding: 'json' }, function (err) {
-          if (err) return cb(err)
-          return cb(bytes)
-        })
+      var stream = drive.createWriteStream({
+        start: offset,
+        flags: 'r+',
+        defaultEncoding: 'binary'
       })
+      stream.on('finish', function () {
+        return cb(0)
+      })
+      stream.on('error', function () {
+        return cb(fuse.EPERM)
+      })
+      stream.write(buf.slice(len))
     }
 
     handlers.unlink = function (path, cb) {
       log('unlink', path)
+      // TODO: save a stat call?
       get(path, function (err, entry) {
         if (err) return cb(err)
-        if (!entry) return cb(ENOENT)
-        db.del(toIndexKey(path), function () {
-          if (!entry.layer) return cb(0)
-          fs.unlink(entry.layer, function () {
-            cb(0)
-          })
+        if (!entry) return cb(fuse.ENOENT)
+        drive.unlink(path, function (err) {
+          if (err) return cb(err)
+          return cb(0)
         })
       })
     }
 
     handlers.rename = function (src, dst, cb) {
       log('rename', src, dst)
-
-      copyOnWrite(src, 0, false, function (err) {
-        if (err) return cb(err)
-        get(src, function (err, entry) {
-          if (err || !entry.layer) {
-            console.error('rename, err:', err)
-            return cb(EPERM)
+      get(src, function (err, entry) {
+        if (err) return cb(fuse.EPERM)
+        pump(drive.createReadStream(src), drive.createWriteStream(dst),
+          function (err) {
+            if (err) return cb(fuse.EPERM)
+            return cb(0)
           }
-          files[dst] = files[src] || []
-          delete files[src]
-          var batch = [{type: 'del', key: toIndexKey(entry.name)}, {type: 'put', key: toIndexKey(dst), valueEncoding: 'json', value: entry}]
-          entry.name = dst
-          db.batch(batch, function (err) {
-            if (err) {
-              console.error('rename:batch, err:', err)
-              return cb(EPERM)
-            }
-            cb(0)
-          })
-        })
+        )
       })
     }
 
     handlers.mkdir = function (path, mode, cb) {
       log('mkdir', path)
-
-      db.put(toIndexKey(path), {name: path, mode: mode, type: 'directory', size: 0}, {valueEncoding: 'json'}, function (err) {
-        if (err) {
-          console.error('mkdir, err:', err)
-          return cb(EPERM)
-        }
-        cb(0)
+      drive.mkdir(path, mode, function (err) {
+        if (err) return cb(fuse.EPERM)
+        return cb(0)
       })
     }
 
     handlers.rmdir = function (path, cb) {
       log('rmdir', path)
-
-      handlers.readdir(path, function (err, list) {
-        if (err) {
-          console.error('rmdir:readdir, err:', err)
-          return cb(EPERM)
-        }
-        if (list.length) {
-          console.error('rmdir, list.length, err:', err)
-          return cb(EPERM)
-        }
-        handlers.unlink(path, cb)
+      drive.rmdir(path, function (err) {
+        if (err) return cb(fuse.EPERM)
+        return cb(0)
       })
     }
 
     handlers.chown = function (path, uid, gid, cb) {
       log('chown', path, uid, gid)
-      get(path, function (err, entry) {
-        if (err) return cb(err)
-        entry.uid = uid
-        entry.gid = gid
-        db.put(toIndexKey(path), entry, { valueEncoding: 'json' }, function (err) {
-          if (err) {
-            console.error('chown, err:', err)
-            return cb(EPERM)
-          }
-          cb(0)
-        })
+      drive.chown(path, uid, gid, function (err) {
+        if (err) return cb(fuse.EPERM)
+        return cb(0)
       })
     }
 
     handlers.chmod = function (path, mode, cb) {
       log('chmod', path, mode)
-
-      get(path, function (err, entry) {
-        if (err) return cb(err)
-        entry.mode = mode
-        db.put(toIndexKey(path), entry, {valueEncoding: 'json'}, function (err) {
-          if (err) {
-            console.error('chmod, err:', err)
-            return cb(EPERM)
-          }
-          cb(0)
-        })
+      drive.chmod(path, mode, function (err) {
+        if (err) return cb(fuse.EPERM)
+        return cb(0)
       })
     }
 
     handlers.create = function (path, mode, cb) {
       log('create', path, mode)
-
-      copyOnWrite(path, mode, true, function (err) {
-        if (err) return cb(err)
-        open(path, 2, cb)
-      })
+      open(path, 2, cb)
     }
 
     handlers.getxattr = function (path, name, buffer, length, offset, cb) {
       log('getxattr')
-
       cb(0)
     }
 
     handlers.setxattr = function (path, name, buffer, length, offset, flags, cb) {
       log('setxattr')
-
       cb(0)
     }
 
@@ -473,10 +243,10 @@ function createFilesystem (opts, cb) {
     handlers.utimens = function (path, actime, modtime, cb) {
       log('utimens', path, actime, modtime)
       get(path, function (err, entry) {
-        if (err) return cb(ENOENT)
+        if (err) return cb(fuse.ENOENT)
         entry.atim = actime.getTime()
         entry.mtim = modtime.getTime()
-        db.put(toIndexKey(path), entry, { valueEncoding: 'json' }, function (err) {
+        drive.updateStat(path, entry, function (err) {
           if (err) return cb(err)
           return cb(0)
         })
@@ -485,36 +255,17 @@ function createFilesystem (opts, cb) {
 
     handlers.mknod = function (path, mode, dev, cb) {
       log('mknod', path, mode, dev)
-      var target = getTargetPath(path)
-      var entry = { name: path, type: 'device', mode: mode, layer: target }
-      mknod(target, mode, dev, function (err) {
+      drive.mknod(path, mode, dev, function (err) {
         if (err) return cb(err)
-        db.put(toIndexKey(path), entry, { valueEncoding: 'json' }, function (err) {
-          if (err) return cb(err)
-          return cb(0)
-        })
+        return cb(0)
       })
-    }
-
-    var processSrc = function (src) {
-      if (src.startsWith(mnt)) {
-        src = src.slice(mnt.length)
-      }
-      if (!src.startsWith('/')) src = '/' + src
-      return src
     }
 
     handlers.symlink = function (src, dest, cb) {
       log('symlink', src, dest)
-      get(dest, function (err, existing) {
-        if (err && !err.notFound) return cb(err)
-        if (existing) return cb(EEXIST)
-        var mode = parseInt('120000', 8) | parseInt('0777', 8)
-        var entry = { name: dest, type: 'symlink', linkname: src, mode: mode }
-        db.put(toIndexKey(dest), entry, { valueEncoding: 'json' }, function (err) {
-          if (err) return cb(err)
-          return cb(0)
-        })
+      drive.symlink(src, dest, function (err) {
+        if (err) return cb(err)
+        return cb(0)
       })
     }
 
@@ -528,25 +279,9 @@ function createFilesystem (opts, cb) {
 
     handlers.link = function (src, dest, cb) {
       log('link', src, dest)
-      src = processSrc(src)
-      get(dest, function (err, existing) {
-        if (err && !err.notFound) return cb(err)
-        if (existing) return cb(EEXIST)
-        var list = files[src] || []
-        get(src, function (err, entry) {
-          if (err && !err.notFound) return cb(err)
-          if ((err || !entry) && (list.length < 3)) return cb(ENOENT)
-          var srcTarget = (entry) ? entry.layer : list[3].entry.layer
-          var destTarget = getTargetPath(dest)
-          entry.layer = destTarget
-          fs.link(srcTarget, destTarget, function (err) {
-            if (err) return cb(err)
-            db.put(toIndexKey(dest), entry, { valueEncoding: 'json' }, function (err) {
-              if (err) return cb(err)
-              return cb(0)
-            })
-          })
-        })
+      drive.link(src, dest, function (err) {
+        if (err) return cb(err)
+        return cb(0)
       })
     }
 
@@ -554,59 +289,20 @@ function createFilesystem (opts, cb) {
       return cb(0)
     }
 
-    /*
-     Generate a stream of the changes in the writable layer of the filesystem
-    */
-    function createChangesStream () {
-      var stream = map.obj(function (chunk, cb) {
-        this.push(Object.assign({}, chunk, { key: util.fromIndexKey(chunk.key) }))
-        cb()
-      })
-      db.createReadStream({ valueEncoding: 'object' }).pipe(stream)
-      return stream
-    }
-
-    handlers.options = ['allow_other']
+    // handlers.options = ['allow_other', 'debug']
     fuse.mount(mnt, handlers, function (err) {
       if (err) return cb(err)
-      cb(null, Object.assign({}, handlers, {
-        createChangesStream: createChangesStream,
-        mnt: mnt,
-        db: db,
-        layers: layers,
-        id: id
-      }))
+      return cb(null, handlers)
     })
   }
 
   mkdirp(mnt, function (err) {
     if (err) return cb(err)
-    fs.exists(layers, function (exists) {
-      if (exists) {
-        return fuse.unmount(mnt, ready)
-      }
-
-      mkdirp(layers, function () {
-        function begin () {
-          var indexStream = createIndexStream()
-          indexStream.on('end', function () {
-            fuse.unmount(mnt, ready)
-          })
-          indexStream.on('data', function (entry) {
-            db.put(toIndexKey(p.resolve(entry.name)), entry, { valueEncoding: 'json' }, function (err) {
-              if (err) return cb(err)
-            })
-          })
-          indexStream.resume()
-        }
-        if (db) {
-          return begin()
-        }
-        mkdirp(dbPath, function () {
-          db = level(dbPath)
-          return begin()
-        })
-      })
+    return ready()
+  })
+  process.on('SIGINT', function () {
+    fuse.unmount(mnt, function (err) {
+      if (err) console.error(err)
     })
   })
 }

@@ -1,33 +1,32 @@
 {
-  "name": "copy-on-write",
-  "version": "0.2.1",
-  "description": "A copy-on-write FUSE implementation",
+  "name": "layerdrive-fs",
+  "version": "0.0.1",
+  "description": "A FUSE implementation for Layerdrives",
   "main": "index.js",
   "scripts": {
-    "build:test": "sh scripts/build-libfuse.sh",
+    "build:tests": "bash scripts/build-libfuse.sh",
     "test": "standard && dependency-check . && tape test/all.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/andrewosh/copy-on-write.git"
+    "url": "git+https://github.com/andrewosh/layerdrive-fs.git"
   },
   "keywords": [
     "copy-on-write",
     "cow",
     "fuse",
     "filesystem",
-    "fs"
+    "fs",
+    "layerdrive"
   ],
   "author": "Andrew Osheroff <andrewosh@gmail.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/andrewosh/copy-on-write/issues"
+    "url": "https://github.com/andrewosh/layerdrive-fs/issues"
   },
-  "homepage": "https://github.com/andrewosh/copy-on-write#readme",
+  "homepage": "https://github.com/andrewosh/layerdrive-fs#readme",
   "devDependencies": {
     "dependency-check": "^2.6.0",
-    "istanbul": "^0.4.4",
-    "memdb": "^1.3.1",
     "standard": "^7.1.2",
     "tape": "^4.6.0",
     "through2": "^2.0.1",
@@ -35,9 +34,8 @@
   },
   "dependencies": {
     "cuid": "^1.3.8",
+    "debug": "^3.0.1",
     "fuse-bindings": "^2.9.0",
-    "level": "^1.4.0",
-    "lexicographic-integer": "^1.1.0",
     "mkdirp": "^0.5.1",
     "mknod": "^1.1.0",
     "pump": "^1.0.1",
