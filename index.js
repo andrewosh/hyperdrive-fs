@@ -13,8 +13,11 @@ function createFilesystem (drive, mnt, opts, cb) {
 
   var ready = function () {
     function get (path, cb) {
-      console.log('getting')
-      return drive.stat(path, cb)
+      drive.stat(path, function (err, stat) {
+        if (err) return cb(err)
+        if (!stat) return cb(new Error('not found'))
+        return cb(null, stat)
+      })
     }
 
     handlers.getattr = function (path, cb) {
@@ -22,6 +25,7 @@ function createFilesystem (drive, mnt, opts, cb) {
 
       get(path, function (err, entry) {
         if (err) return cb(fuse.ENOENT)
+        log('getattr:', entry)
         return cb(0, entry)
       })
     }
@@ -30,24 +34,26 @@ function createFilesystem (drive, mnt, opts, cb) {
       log('readdir', path)
       return drive.readdir(path, function (err, files) {
         if (err) return cb(fuse.ENOENT)
+        log('readdir files:', files)
         return cb(0, files)
       })
     }
 
     var files = []
     var open = function (path, flags, cb) {
-      console.log('open:', path)
+      log('open:', path)
       var push = function (data) {
         var list = files[path] = files[path] || [true, true, true] // fd > 3
         var fd = list.indexOf(null)
         if (fd === -1) fd = list.length
         list[fd] = data
+        log('in push, fd:', fd)
         cb(0, fd)
       }
-
       get(path, function (err, entry) {
         if (err) return cb(fuse.ENOENT)
-        if (entry.type === 'symlink') return open(entry.linkname, flags, cb)
+        if (entry.linkname) return open(entry.linkname, flags, cb)
+        log('calling push with entry:', entry)
         return push({offset: 0, entry: entry})
       })
     }
@@ -79,9 +85,7 @@ function createFilesystem (drive, mnt, opts, cb) {
 
       if (len + offset > file.entry.length) len = file.entry.length - offset
 
-      if (file.fd === undefined) return
-
-      var stream = drive.createReadStream({ start: offset, length: len })
+      var stream = drive.createReadStream(path, { start: offset, length: len })
       collect(stream, function (err, list) {
         if (err) return cb(fuse.EPERM)
         var offset = 0
@@ -133,22 +137,22 @@ function createFilesystem (drive, mnt, opts, cb) {
       var list = files[path] || []
       var file = list[handle]
       if (!file) return cb(fuse.ENOENT)
-      if (file.fd === undefined) {
-        console.error('write:fd  error')
-        return cb(fuse.EPERM)
-      }
-      var stream = drive.createWriteStream({
+      var stream = drive.createWriteStream(path, {
         start: offset,
         flags: 'r+',
         defaultEncoding: 'binary'
       })
       stream.on('finish', function () {
-        return cb(0)
+        file.offset = offset + len
+        file.entry.size += len
+        console.log('finished write, file:', file)
+        return cb(len)
       })
       stream.on('error', function () {
         return cb(fuse.EPERM)
       })
       stream.write(buf.slice(len))
+      stream.end()
     }
 
     handlers.unlink = function (path, cb) {
@@ -211,7 +215,13 @@ function createFilesystem (drive, mnt, opts, cb) {
 
     handlers.create = function (path, mode, cb) {
       log('create', path, mode)
-      open(path, 2, cb)
+      drive.append(path, '', function (err) {
+        if (err) return cb(fuse.EPERM)
+        drive.chmod(path, mode, function (err) {
+          if (err) return cb(fuse.EPERM)
+          return open(path, mode, cb)
+        })
+      })
     }
 
     handlers.getxattr = function (path, name, buffer, length, offset, cb) {
@@ -292,7 +302,7 @@ function createFilesystem (drive, mnt, opts, cb) {
     // handlers.options = ['allow_other', 'debug']
     fuse.mount(mnt, handlers, function (err) {
       if (err) return cb(err)
-      return cb(null, handlers)
+      return cb(null, mnt, handlers)
     })
   }
 

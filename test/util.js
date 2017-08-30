@@ -13,7 +13,7 @@ function makeTestFilesystem (opts, cb) {
   var mntDir = p.join(__dirname, 'mnt', cuid())
   createLayerdrive('alpine', 1, 1, 1, 100, function (err, drive, _, reference) {
     if (err) throw err
-    createFilesystem(drive, mntDir, opts, cb)
+    return createFilesystem(drive, mntDir, opts, cb)
   })
 }
 
