@@ -13,9 +13,12 @@ function createFilesystem (drive, mnt, opts, cb) {
 
   var ready = function () {
     function get (path, cb) {
-      drive.stat(path, function (err, stat) {
+      if (typeof opts === 'function') return get(path, {}, opts)
+      drive.stat(path, { noFollow: true }, function (err, stat) {
         if (err) return cb(err)
-        if (!stat) return cb(new Error('not found'))
+        var error = new Error('not found')
+        error.notFound = true
+        if (!stat) return cb(error)
         return cb(null, stat)
       })
     }
@@ -24,7 +27,6 @@ function createFilesystem (drive, mnt, opts, cb) {
       log('getattr', path)
 
       get(path, function (err, entry) {
-        console.log('getattr err:', err)
         if (err) return cb(fuse.ENOENT)
         log('getattr:', entry)
         return cb(0, entry)
@@ -266,11 +268,26 @@ function createFilesystem (drive, mnt, opts, cb) {
       })
     }
 
+    var processSrc = function (src) {
+      if (src.startsWith(mnt)) {
+        src = src.slice(mnt.length)
+      }
+      if (!src.startsWith('/')) src = '/' + src
+      return src
+    }
+
     handlers.symlink = function (src, dest, cb) {
+      src = processSrc(src)
       log('symlink', src, dest)
-      drive.symlink(src, dest, function (err) {
-        if (err) return cb(err)
-        return cb(0)
+      get(dest, function (err, entry) {
+        if (err && !err.notFound) return cb(err)
+        if (entry) return cb(fuse.EEXIST)
+        drive.symlink(src, dest, function (err) {
+          console.log('symlink error:', err)
+          if (err) return cb(err)
+          files[dest] = files[src] || []
+          return cb(0)
+        })
       })
     }
 
