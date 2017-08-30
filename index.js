@@ -1,6 +1,6 @@
-var collect = require('stream-collector')
 var fuse = require('fuse-bindings')
 var pump = require('pump')
+var concat = require('concat-stream')
 var mkdirp = require('mkdirp')
 var debug = require('debug')
 
@@ -81,20 +81,16 @@ function createFilesystem (drive, mnt, opts, cb) {
       var file = list[handle]
       if (!file) return cb(fuse.ENOENT)
 
-      if (file.entry.length === 0) return cb(0)
-
-      if (len + offset > file.entry.length) len = file.entry.length - offset
-
-      var stream = drive.createReadStream(path, { start: offset, length: len })
-      collect(stream, function (err, list) {
+      var end = Math.min(file.entry.size - 1, offset + len)
+      var stream = drive.createReadStream(path, { start: offset, end: end })
+      pump(stream, concat(gotContents), function (err) {
         if (err) return cb(fuse.EPERM)
-        var offset = 0
-        list.forEach(function (data) {
-          data.copy(buf, offset)
-          offset += data.length
-        })
-        return cb(offset)
       })
+      function gotContents (contents) {
+        log('contents:', contents)
+        contents.copy(buf)
+        return cb(contents.length)
+      }
     }
 
     handlers.truncate = function (path, size, cb) {
@@ -144,14 +140,13 @@ function createFilesystem (drive, mnt, opts, cb) {
       })
       stream.on('finish', function () {
         file.offset = offset + len
-        file.entry.size += len
         console.log('finished write, file:', file)
         return cb(len)
       })
       stream.on('error', function () {
         return cb(fuse.EPERM)
       })
-      stream.write(buf.slice(len))
+      stream.write(buf.slice(0, len))
       stream.end()
     }
 
