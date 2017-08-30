@@ -24,6 +24,7 @@ function createFilesystem (drive, mnt, opts, cb) {
       log('getattr', path)
 
       get(path, function (err, entry) {
+        console.log('getattr err:', err)
         if (err) return cb(fuse.ENOENT)
         log('getattr:', entry)
         return cb(0, entry)
@@ -72,6 +73,7 @@ function createFilesystem (drive, mnt, opts, cb) {
       list[handle] = null
       if (!list.length) delete files[path]
 
+      log('release successful')
       return cb(0)
     }
 
@@ -154,6 +156,8 @@ function createFilesystem (drive, mnt, opts, cb) {
       log('unlink', path)
       // TODO: save a stat call?
       get(path, function (err, entry) {
+        console.log('in unlink, err:', err)
+        console.log('in unlink, entry:', entry)
         if (err) return cb(err)
         if (!entry) return cb(fuse.ENOENT)
         drive.unlink(path, function (err) {
@@ -165,14 +169,10 @@ function createFilesystem (drive, mnt, opts, cb) {
 
     handlers.rename = function (src, dst, cb) {
       log('rename', src, dst)
-      get(src, function (err, entry) {
-        if (err) return cb(fuse.EPERM)
-        pump(drive.createReadStream(src), drive.createWriteStream(dst),
-          function (err) {
-            if (err) return cb(fuse.EPERM)
-            return cb(0)
-          }
-        )
+      drive.mv(src, dst, function (err) {
+        if (err) return cb(err)
+        files[dst] = files[src] || []
+        return cb(0)
       })
     }
 
