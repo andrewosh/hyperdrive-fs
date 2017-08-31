@@ -1,3 +1,4 @@
+var p = require('path')
 var fuse = require('fuse-bindings')
 var pump = require('pump')
 var concat = require('concat-stream')
@@ -13,11 +14,14 @@ function createFilesystem (drive, mnt, opts, cb) {
 
   var ready = function () {
     function get (path, cb) {
+      log('in get, path:', path)
       if (typeof opts === 'function') return get(path, {}, opts)
       drive.stat(path, { noFollow: true }, function (err, stat) {
         if (err) return cb(err)
         var error = new Error('not found')
         error.notFound = true
+        console.log('in get, stat:', stat)
+        console.log('in get, err:', err)
         if (!stat) return cb(error)
         return cb(null, stat)
       })
@@ -25,7 +29,7 @@ function createFilesystem (drive, mnt, opts, cb) {
 
     handlers.getattr = function (path, cb) {
       log('getattr', path)
-
+      log('path length:', path.length)
       get(path, function (err, entry) {
         if (err) return cb(fuse.ENOENT)
         log('getattr:', entry)
@@ -37,6 +41,7 @@ function createFilesystem (drive, mnt, opts, cb) {
       log('readdir', path)
       return drive.readdir(path, function (err, files) {
         if (err) return cb(fuse.ENOENT)
+        files = files.map(function (file) { return p.basename(file) })
         log('readdir files:', files)
         return cb(0, files)
       })
@@ -85,9 +90,9 @@ function createFilesystem (drive, mnt, opts, cb) {
       var file = list[handle]
       if (!file) return cb(fuse.ENOENT)
 
-      var end = Math.min(file.entry.size - 1, offset + len)
+      var end = Math.max(0, Math.min(file.entry.size - 1, offset + len))
       var stream = drive.createReadStream(path, { start: offset, end: end })
-      pump(stream, concat(gotContents), function (err) {
+      pump(stream, concat({ encoding: 'buffer' }, gotContents), function (err) {
         if (err) return cb(fuse.EPERM)
       })
       function gotContents (contents) {
@@ -295,6 +300,7 @@ function createFilesystem (drive, mnt, opts, cb) {
       log('readlink', path)
       get(path, function (err, entry) {
         if (err) return cb(err)
+        console.log('in readlink, entry.linkname:', entry.linkname)
         return cb(0, entry.linkname)
       })
     }
@@ -314,6 +320,7 @@ function createFilesystem (drive, mnt, opts, cb) {
     // handlers.options = ['allow_other', 'debug']
     fuse.mount(mnt, handlers, function (err) {
       if (err) return cb(err)
+      console.log('MOUNTED!')
       return cb(null, mnt, handlers)
     })
   }
