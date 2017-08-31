@@ -184,8 +184,9 @@ function createFilesystem (drive, mnt, opts, cb) {
     }
 
     handlers.mkdir = function (path, mode, cb) {
-      log('mkdir', path)
-      drive.mkdir(path, mode, function (err) {
+      log('mkdir', path, mode)
+      drive.mkdir(path, { mode: mode }, function (err) {
+        log('mkdir err:', err)
         if (err) return cb(fuse.EPERM)
         return cb(0)
       })
