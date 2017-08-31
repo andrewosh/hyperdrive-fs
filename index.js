@@ -283,7 +283,6 @@ function createFilesystem (drive, mnt, opts, cb) {
     }
 
     handlers.symlink = function (src, dest, cb) {
-      src = processSrc(src)
       log('symlink', src, dest)
       get(dest, function (err, entry) {
         if (err && !err.notFound) return cb(err)
@@ -308,6 +307,7 @@ function createFilesystem (drive, mnt, opts, cb) {
 
     handlers.link = function (src, dest, cb) {
       log('link', src, dest)
+      src = processSrc(src)
       drive.link(src, dest, function (err) {
         if (err) return cb(err)
         return cb(0)
