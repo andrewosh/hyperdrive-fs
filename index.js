@@ -1,15 +1,12 @@
 var p = require('path')
 var fuse = require('fuse-bindings')
-var pump = require('pump')
-var concat = require('concat-stream')
+var pump = require('pump'
 var mkdirp = require('mkdirp')
 var debug = require('debug')
 
-function createFilesystem (drive, mnt, opts, cb) {
-  if (typeof opts === 'function') return module.exports(drive, mnt, null, opts)
-  if (!opts) opts = {}
+module.exports.getHandlers = function getHandlers (drive) {
 
-  var log = opts.log || debug('layerdrive-fs')
+  var log = opts.log || debug('hyperdrive-fs')
   var handlers = {}
 
   var ready = function () {
@@ -318,10 +315,19 @@ function createFilesystem (drive, mnt, opts, cb) {
       return cb(0)
     }
 
+    return handlers
+}
+
+module.exports.createFilesystem = function createFilesystem (drive, mnt, opts, cb) {
+  if (typeof opts === 'function') return module.exports(drive, mnt, null, opts)
+  if (!opts) opts = {}
+
+  var handlers = getHandlers(drive)
+
+  function ready () {
     // handlers.options = ['allow_other', 'debug']
     fuse.mount(mnt, handlers, function (err) {
       if (err) return cb(err)
-      console.log('MOUNTED!')
       return cb(null, mnt, handlers)
     })
   }

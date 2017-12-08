@@ -1,7 +1,7 @@
 {
-  "name": "layerdrive-fs",
+  "name": "hyperdrive-fs",
   "version": "0.0.1",
-  "description": "A FUSE implementation for Layerdrives",
+  "description": "A FUSE implementation for Hyperdrives",
   "main": "index.js",
   "scripts": {
     "build:tests": "bash scripts/build-libfuse.sh",
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/andrewosh/layerdrive-fs.git"
+    "url": "git+https://github.com/andrewosh/hyperdrive-fs.git"
   },
   "keywords": [
     "copy-on-write",
@@ -17,14 +17,14 @@
     "fuse",
     "filesystem",
     "fs",
-    "layerdrive"
+    "hyperdrive"
   ],
   "author": "Andrew Osheroff <andrewosh@gmail.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/andrewosh/layerdrive-fs/issues"
+    "url": "https://github.com/andrewosh/hyperdrive-fs/issues"
   },
-  "homepage": "https://github.com/andrewosh/layerdrive-fs#readme",
+  "homepage": "https://github.com/andrewosh/hyperdrive-fs#readme",
   "devDependencies": {
     "dependency-check": "^2.6.0",
     "hyperdrive": "^9.5.1",
